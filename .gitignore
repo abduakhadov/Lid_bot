@@ -1,0 +1,32 @@
+# Environment variables
+.env
+
+# Google Service Account credentials
+credentials.json
+*.json
+!package.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+scratch/
+*.db
+bot.db
