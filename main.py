@@ -55,6 +55,16 @@ async def main() -> None:
     dp.include_router(contact_router)
     dp.include_router(chat_router)
 
+    # Telegram menyu komandalarini o'rnatish
+    from aiogram.types import BotCommand
+    commands = [
+        BotCommand(command="start", description="Botni qayta ishga tushirish"),
+        BotCommand(command="courses", description="Barcha kurslar ro'yxati"),
+        BotCommand(command="stats", description="Lidlar statistikasi (Admin)"),
+        BotCommand(command="add_course", description="Yangi kurs qo'shish (Admin)"),
+    ]
+    await bot.set_my_commands(commands)
+
     # Eski xabarlarni tozalash va pollingni boshlash
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Bot tayyor va xabarlarni qabul qilmoqda!")
