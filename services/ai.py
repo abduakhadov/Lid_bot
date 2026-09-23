@@ -107,74 +107,91 @@ async def get_structured_ai_response(
 ) -> dict[str, Any]:
     """
     Gemini modeliga murojaat qilib, structured JSON ma'lumot oladi.
+    Model kvotasi tugasa zaxira modellar orqali avtomatik qayta urinadi.
     """
-    try:
-        system_instruction = build_system_prompt(courses, current_lead_data)
-        
-        # JSON rejimida Gemini GenerativeModel
-        model = genai.GenerativeModel(
-            model_name=settings.GEMINI_MODEL,
-            system_instruction=system_instruction,
-            generation_config={"response_mime_type": "application/json"}
-        )
+    models_to_try = [
+        settings.GEMINI_MODEL,
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+    ]
+    # Takrorlanmas model ro'yxati
+    seen = set()
+    unique_models = [m for m in models_to_try if m and not (m in seen or seen.add(m))]
 
-        recent_history = history[-10:] if len(history) > 10 else history
-        gemini_history = []
-        for msg in recent_history:
-            role = "user" if msg.get("role") == "user" else "model"
-            text = msg.get("text", "")
-            if text:
-                gemini_history.append({"role": role, "parts": [text]})
+    recent_history = history[-10:] if len(history) > 10 else history
+    gemini_history = []
+    for msg in recent_history:
+        role = "user" if msg.get("role") == "user" else "model"
+        text = msg.get("text", "")
+        if text:
+            gemini_history.append({"role": role, "parts": [text]})
 
-        chat = model.start_chat(history=gemini_history)
-        response = await chat.send_message_async(user_message)
-        raw_text = response.text.strip()
-        
-        parsed = extract_json_from_text(raw_text)
-        if parsed and isinstance(parsed, dict) and "reply" in parsed:
-            # Qiymatlarni tekshirish va tozalash
-            name = validate_name(parsed.get("name")) or current_lead_data.get("name")
-            age = validate_age(parsed.get("age")) or current_lead_data.get("age")
-            phone = format_and_validate_phone(str(parsed.get("phone") or "")) or current_lead_data.get("phone")
-            course_id = parsed.get("course_id") or current_lead_data.get("course_id")
-            status = parsed.get("status", "collecting")
+    system_instruction = build_system_prompt(courses, current_lead_data)
 
-            # Agar hamma ma'lumotlar bor bo'lsa, avtomatik "hot" ga o'tkazish
-            if name and age and phone and course_id and status != "needs_operator":
-                status = "hot"
+    last_error = None
+    for model_name in unique_models:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=system_instruction,
+                generation_config={"response_mime_type": "application/json"}
+            )
 
-            return {
-                "reply": parsed.get("reply", ""),
-                "name": name,
-                "age": age,
-                "phone": phone,
-                "course_id": course_id,
-                "status": status,
-                "unanswered_question": parsed.get("unanswered_question"),
-                "summary": parsed.get("summary")
-            }
+            chat = model.start_chat(history=gemini_history)
+            response = await chat.send_message_async(user_message)
+            raw_text = response.text.strip()
+            
+            parsed = extract_json_from_text(raw_text)
+            if parsed and isinstance(parsed, dict) and "reply" in parsed:
+                # Qiymatlarni tekshirish va tozalash
+                name = validate_name(parsed.get("name")) or current_lead_data.get("name")
+                age = validate_age(parsed.get("age")) or current_lead_data.get("age")
+                phone = format_and_validate_phone(str(parsed.get("phone") or "")) or current_lead_data.get("phone")
+                course_id = parsed.get("course_id") or current_lead_data.get("course_id")
+                status = parsed.get("status", "collecting")
 
-        # Agar JSON bo'lmay qolsa, oddiy matn deb olamiz
-        return {
-            "reply": raw_text,
-            "name": current_lead_data.get("name"),
-            "age": current_lead_data.get("age"),
-            "phone": current_lead_data.get("phone"),
-            "course_id": current_lead_data.get("course_id"),
-            "status": "collecting",
-            "unanswered_question": None,
-            "summary": None
-        }
-    except Exception as e:
-        logger.error(f"Gemini Structured AI xatoligi: {e}", exc_info=True)
-        return {
-            "reply": (
-                "Hozirda tizimda texnik uzilish kuzatildi. "
-                "Savolingiz yoki ro'yxatdan o'tishingiz yuzasidan operatorimiz tez orada siz bilan bog'lanadi."
-            ),
-            "name": current_lead_data.get("name"),
-            "age": current_lead_data.get("age"),
-            "phone": current_lead_data.get("phone"),
-            "course_id": current_lead_data.get("course_id"),
-            "status": "needs_operator"
-        }
+                if name and age and phone and course_id and status != "needs_operator":
+                    status = "hot"
+
+                return {
+                    "reply": parsed.get("reply", ""),
+                    "name": name,
+                    "age": age,
+                    "phone": phone,
+                    "course_id": course_id,
+                    "status": status,
+                    "unanswered_question": parsed.get("unanswered_question"),
+                    "summary": parsed.get("summary")
+                }
+
+            if raw_text:
+                return {
+                    "reply": raw_text,
+                    "name": current_lead_data.get("name"),
+                    "age": current_lead_data.get("age"),
+                    "phone": current_lead_data.get("phone"),
+                    "course_id": current_lead_data.get("course_id"),
+                    "status": "collecting",
+                    "unanswered_question": None,
+                    "summary": None
+                }
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Model '{model_name}' da xatolik ({e}), keyingi zaxira modelga o'tilmoqda...")
+            continue
+
+    logger.error(f"Barcha Gemini modellari xatolik berdi. So'nggi xatolik: {last_error}", exc_info=True)
+    return {
+        "reply": (
+            "Hozirda tizimda texnik uzilish kuzatildi. "
+            "Savolingiz yoki ro'yxatdan o'tishingiz yuzasidan operatorimiz tez orada siz bilan bog'lanadi."
+        ),
+        "name": current_lead_data.get("name"),
+        "age": current_lead_data.get("age"),
+        "phone": current_lead_data.get("phone"),
+        "course_id": current_lead_data.get("course_id"),
+        "status": "needs_operator",
+        "unanswered_question": user_message,
+        "summary": "AI xizmatida texnik xatolik yuz berdi."
+    }
