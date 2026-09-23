@@ -10,9 +10,11 @@ from config import settings
 from db.base import init_db, AsyncSessionLocal
 from db.crud import seed_initial_courses
 from handlers.start import router as start_router
+from handlers.admin import router as admin_router
 from handlers.courses import router as courses_router
 from handlers.contact import router as contact_router
 from handlers.chat import router as chat_router
+from middlewares.throttle import ThrottlingMiddleware
 
 
 async def main() -> None:
@@ -43,8 +45,12 @@ async def main() -> None:
     )
     dp = Dispatcher(storage=MemoryStorage())
 
+    # Spamdan himoya (Rate limit middleware - Bonus vazifa)
+    dp.message.middleware(ThrottlingMiddleware(rate_limit=settings.RATE_LIMIT))
+
     # Routerlarni ro'yxatdan o'tkazish
     dp.include_router(start_router)
+    dp.include_router(admin_router)
     dp.include_router(courses_router)
     dp.include_router(contact_router)
     dp.include_router(chat_router)

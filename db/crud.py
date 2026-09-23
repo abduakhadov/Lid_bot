@@ -1,5 +1,6 @@
-from typing import Sequence
-from sqlalchemy import select
+from datetime import datetime, time
+from typing import Sequence, Any
+from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import Course, Lead
 
@@ -16,6 +17,31 @@ async def get_course_by_id(session: AsyncSession, course_id: int) -> Course | No
     stmt = select(Course).where(Course.id == course_id)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def create_course(
+    session: AsyncSession,
+    name: str,
+    description: str,
+    price: int,
+    duration: str,
+    age_min: int = 5,
+    age_max: int = 60
+) -> Course:
+    """Yangi kurs qo'shish (Admin buyrug'i uchun)"""
+    course = Course(
+        name=name,
+        description=description,
+        price=price,
+        duration=duration,
+        age_min=age_min,
+        age_max=age_max,
+        is_active=True
+    )
+    session.add(course)
+    await session.commit()
+    await session.refresh(course)
+    return course
 
 
 async def get_lead_by_telegram_id(session: AsyncSession, telegram_id: int) -> Lead | None:
@@ -70,6 +96,56 @@ async def upsert_lead(
     await session.commit()
     await session.refresh(lead)
     return lead
+
+
+async def get_lead_statistics(session: AsyncSession) -> dict[str, Any]:
+    """
+    Admin statistikasi:
+    - Bugungi lidlar soni
+    - Jami lidlar soni
+    - Eng ko'p tanlangan kurs
+    - Hot va needs_operator lidlar soni
+    """
+    # Jami lidlar
+    total_leads = await session.scalar(select(func.count(Lead.id))) or 0
+
+    # Bugungi lidlar
+    today_start = datetime.combine(datetime.utcnow().date(), time.min)
+    today_leads = await session.scalar(
+        select(func.count(Lead.id)).where(Lead.created_at >= today_start)
+    ) or 0
+
+    # Aniq lidlar va Operator yordami kerak bo'lganlar
+    hot_leads = await session.scalar(
+        select(func.count(Lead.id)).where(Lead.status.in_(["hot", "accepted"]))
+    ) or 0
+
+    needs_operator_leads = await session.scalar(
+        select(func.count(Lead.id)).where(Lead.status == "needs_operator")
+    ) or 0
+
+    # Eng ko'p tanlangan kurs
+    stmt = (
+        select(Course.name, func.count(Lead.id).label("count"))
+        .join(Lead, Course.id == Lead.course_id)
+        .group_by(Course.id, Course.name)
+        .order_by(desc("count"))
+        .limit(1)
+    )
+    res = await session.execute(stmt)
+    top_course_row = res.first()
+    
+    top_course_name = top_course_row[0] if top_course_row else "Hali tanlanmagan"
+    top_course_count = top_course_row[1] if top_course_row else 0
+
+    return {
+        "today_leads": today_leads,
+        "total_leads": total_leads,
+        "hot_leads": hot_leads,
+        "needs_operator_leads": needs_operator_leads,
+        "top_course_name": top_course_name,
+        "top_course_count": top_course_count
+    }
 
 
 async def seed_initial_courses(session: AsyncSession) -> None:
