@@ -117,14 +117,17 @@ async def handle_accept_lead(callback: CallbackQuery) -> None:
         lead.status = "accepted"
         user_tg_id = lead.telegram_id
         lead_phone = lead.phone
+        lead_name = lead.full_name
         await session.commit()
 
-    # Google Sheets dagi statusni yangilash
-    if lead_phone:
+
+    # Google Sheets dagi statusni yangilash (eng oxirgi qo'shilgan mos qatorni topadi)
+    if lead_phone or lead_name:
         try:
-            update_lead_status_in_sheets(lead_phone, "Qabul qilindi")
+            update_lead_status_in_sheets(phone=lead_phone or "", new_status="Qabul qilindi", name=lead_name)
         except Exception as e:
             logger.error(f"Sheets statusini update qilishda xatolik: {e}")
+
 
     # Admin xabarini tahrirlash (tugmalarni olib tashlash)
     original_text = callback.message.html_text or callback.message.text
@@ -176,14 +179,16 @@ async def handle_reject_lead(callback: CallbackQuery) -> None:
         lead.status = "rejected"
         user_tg_id = lead.telegram_id
         lead_phone = lead.phone
+        lead_name = lead.full_name
         await session.commit()
 
-    # Google Sheets dagi statusni yangilash
-    if lead_phone:
+    # Google Sheets dagi statusni yangilash (eng oxirgi qo'shilgan mos qatorni topadi)
+    if lead_phone or lead_name:
         try:
-            update_lead_status_in_sheets(lead_phone, "Rad etildi")
+            update_lead_status_in_sheets(phone=lead_phone or "", new_status="Rad etildi", name=lead_name)
         except Exception as e:
             logger.error(f"Sheets statusini update qilishda xatolik: {e}")
+
 
     # Admin xabarini tahrirlash (tugmalarni olib tashlash)
     original_text = callback.message.html_text or callback.message.text

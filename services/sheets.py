@@ -1,7 +1,9 @@
 import os
+import re
 import logging
 from datetime import datetime
 import gspread
+
 from google.oauth2.service_account import Credentials
 from config import settings
 
@@ -79,9 +81,9 @@ def append_lead_to_sheets(
         return False
 
 
-def update_lead_status_in_sheets(phone: str, new_status: str) -> bool:
+def update_lead_status_in_sheets(phone: str, new_status: str, name: str | None = None) -> bool:
     """
-    Telefon raqami bo'yicha Google Sheets dagi lid statusini yangilash.
+    Telefon raqami (va ismi) bo'yicha Google Sheets dagi eng oxirgi mos lid statusini yangilash.
     """
     creds_file = settings.GOOGLE_CREDENTIALS_FILE
     if not os.path.exists(creds_file):
@@ -105,12 +107,40 @@ def update_lead_status_in_sheets(phone: str, new_status: str) -> bool:
             return False
 
         sheet = spreadsheet.sheet1
-        cell = sheet.find(phone)
-        if cell:
-            sheet.update_cell(cell.row, 7, new_status)
-            logger.info(f"Sheets da lid statusi yangilandi (Qator {cell.row}: {new_status})")
+        rows = sheet.get_all_values()
+        if not rows or len(rows) <= 1:
+            return False
+
+        # Faqat raqamlarni ajratib olish (telefon taqqoslash uchun)
+        clean_search_phone = re.sub(r"\D", "", phone) if phone else ""
+        clean_search_name = name.strip().lower() if name else ""
+
+        target_row_idx = None
+        # Pastdan yuqoriga qarab (eng oxirgi qo'shilgan qatordan) izlash
+        for idx in range(len(rows) - 1, 0, -1):
+            row = rows[idx]
+            row_name = row[1] if len(row) > 1 else ""
+            row_phone = row[3] if len(row) > 3 else ""
+            clean_row_phone = re.sub(r"\D", "", row_phone)
+
+            # 1. Telefon raqami mos kelsa
+            if clean_search_phone and clean_row_phone and (clean_search_phone in clean_row_phone or clean_row_phone in clean_search_phone):
+                target_row_idx = idx + 1
+                break
+            # 2. Yoki ism mos kelsa
+            elif clean_search_name and row_name and clean_search_name in row_name.strip().lower():
+                target_row_idx = idx + 1
+                break
+
+        if target_row_idx:
+            # 7-ustun (Status) update qilinadi
+            sheet.update_cell(target_row_idx, 7, new_status)
+            logger.info(f"Sheets da eng oxirgi lid statusi yangilandi (Qator {target_row_idx}: {new_status})")
             return True
+        else:
+            logger.warning(f"Sheets da '{phone}' ({name}) bo'yicha qator topilmadi.")
     except Exception as e:
         logger.error(f"Google Sheets statusini yangilashda xatolik: {e}")
     return False
+
 
