@@ -1,6 +1,12 @@
 import asyncio
 import logging
 import sys
+import warnings
+
+# AFC va deprecated paket ogohlantirishlarini o'chirish
+warnings.filterwarnings("ignore", category=FutureWarning)
+logging.getLogger("google_genai.models").setLevel(logging.ERROR)
+logging.getLogger("google_genai").setLevel(logging.ERROR)
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties

@@ -24,9 +24,8 @@ class AddCourseStates(StatesGroup):
 def is_admin(user_id: int) -> bool:
     """Foydalanuvchi admin ekanligini tekshirish"""
     admins = settings.admin_id_list
-    # Agar ADMIN_IDS berilmagan bo'lsa, test uchun barcha foydalanuvchilar ishlata oladi
     if not admins:
-        return True
+        return False  # ADMIN_IDS bo'sh bo'lsa hech kim admin emas
     return user_id in admins
 
 

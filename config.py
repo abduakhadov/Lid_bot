@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     
     # Gemini AI
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.7-flash"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///bot.db"

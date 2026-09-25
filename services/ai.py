@@ -1,16 +1,31 @@
+import asyncio
 import json
 import logging
 import re
 from typing import Sequence, Any
-import google.generativeai as genai
+
+from google import genai
+from google.genai import types
+
 from config import settings
 from db.models import Course
 from services.lead import format_and_validate_phone, validate_age, validate_name
 
 logger = logging.getLogger(__name__)
 
-# Gemini API ni sozlash
-genai.configure(api_key=settings.GEMINI_API_KEY)
+# Yangi google.genai SDK bilan client yaratish
+_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+# Zaxira modellar ro'yxati (tezdan sekinroqqa) — haqiqiy API nomlar
+MODELS_TO_TRY = [
+    "gemini-flash-lite-latest",  # Eng tez — "latest" alias, har doim eng yangi lite
+    "gemini-3.5-flash-lite",     # Tez, arzon
+    "gemini-flash-latest",       # Tez full flash
+    "gemini-3.5-flash",          # Zaxira
+]
+
+# Har bir model urinishiga maksimal vaqt (sekund)
+MODEL_TIMEOUT = 8
 
 
 def build_system_prompt(courses: Sequence[Course], current_lead_data: dict[str, Any]) -> str:
@@ -24,7 +39,6 @@ def build_system_prompt(courses: Sequence[Course], current_lead_data: dict[str, 
         )
     courses_text = "\n".join(courses_info) if courses_info else "Hozircha kurslar ro'yxati mavjud emas."
 
-    # Hozirgacha yig'ilgan ma'lumotlar
     c_name = current_lead_data.get("name") or "noma'lum"
     c_age = current_lead_data.get("age") or "noma'lum"
     c_phone = current_lead_data.get("phone") or "noma'lum"
@@ -49,9 +63,9 @@ HOZIRGACHA FOYDALANUVCHIDAN YIG'ILGAN MA'LUMOTLAR:
 - Tanlangan kurs ID: {c_course_id}
 
 MUHIM VALIDATSIYA VA QOIDALAR:
-1. Bazada yo'q narsani HECH QACHON o'ylab topmang! Agar dars jadvali, haftaning qaysi kunlari, vaqtlari yoki ro'yxatda yo'q kurslar so'ralsa, "Bu haqida operatorimiz aniq javob beradi" deb ayting va statusni "needs_operator" qiling.
-2. Agar foydalanuvchi yoshini so'z bilan ("o'n to'rt", "yigirma") yoki matn ("abc") bilan yozsa, xatoni xushmuomala tushuntirib, faqat raqamda (masalan: 14) kiritishini so'rang va "age": null qoldiring.
-3. Agar telefon raqamini noto'g'ri kiritsa (masalan: "12345"), xatoni tushuntirib, to'g'ri telefon raqamini kiritishini so'rang va "phone": null qoldiring.
+1. Bazada yo'q narsani HECH QACHON o'ylab topmang! Agar dars jadvali, haftaning qaysi kunlari, vaqtlari yoki ro'yxatda yo'q kurslar so'ralsa, \"Bu haqida operatorimiz aniq javob beradi\" deb ayting va statusni \"needs_operator\" qiling.
+2. Agar foydalanuvchi yoshini so'z bilan (\"o'n to'rt\", \"yigirma\") yoki matn (\"abc\") bilan yozsa, xatoni xushmuomala tushuntirib, faqat raqamda (masalan: 14) kiritishini so'rang va \"age\": null qoldiring.
+3. Agar telefon raqamini noto'g'ri kiritsa (masalan: \"12345\"), xatoni tushuntirib, to'g'ri telefon raqamini kiritishini so'rang va \"phone\": null qoldiring.
 4. Javobingizni FAQAT va FAQAT quyidagi JSON formatda qaytaring (boshqa hech qanday ortiqcha matnsiz):
 
 {{
@@ -75,12 +89,10 @@ status qiymatlari:
 def extract_json_from_text(text: str) -> dict[str, Any] | None:
     """Matn ichidan JSON obyektni xavfsiz ajratib olish"""
     try:
-        # To'g'ridan-to'g'ri JSON deb ko'rish
         return json.loads(text)
     except Exception:
         pass
 
-    # Markdown ```json ... ``` blokini qidirish
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     if match:
         try:
@@ -88,7 +100,6 @@ def extract_json_from_text(text: str) -> dict[str, Any] | None:
         except Exception:
             pass
 
-    # Shunchaki birinchi { va oxirgi } oralig'ini qidirish
     match = re.search(r"(\{.*\})", text, re.DOTALL)
     if match:
         try:
@@ -106,45 +117,52 @@ async def get_structured_ai_response(
     current_lead_data: dict[str, Any]
 ) -> dict[str, Any]:
     """
-    Gemini modeliga murojaat qilib, structured JSON ma'lumot oladi.
+    Yangi google.genai SDK orqali structured JSON javob oladi.
     Model kvotasi tugasa zaxira modellar orqali avtomatik qayta urinadi.
     """
-    models_to_try = [
-        settings.GEMINI_MODEL,
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite"
-    ]
-    # Takrorlanmas model ro'yxati
-    seen = set()
-    unique_models = [m for m in models_to_try if m and not (m in seen or seen.add(m))]
-
+    # Faqat oxirgi 10 ta xabar (task.md talabi)
     recent_history = history[-10:] if len(history) > 10 else history
+
+    # Suhbat tarixini yangi SDK formatiga o'tkazish
     gemini_history = []
     for msg in recent_history:
         role = "user" if msg.get("role") == "user" else "model"
         text = msg.get("text", "")
         if text:
-            gemini_history.append({"role": role, "parts": [text]})
+            gemini_history.append(
+                types.Content(role=role, parts=[types.Part(text=text)])
+            )
 
     system_instruction = build_system_prompt(courses, current_lead_data)
 
     last_error = None
-    for model_name in unique_models:
+    for model_name in MODELS_TO_TRY:
         try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=system_instruction,
-                generation_config={"response_mime_type": "application/json"}
-            )
+            logger.debug(f"Model sinashmoqda: {model_name}")
 
-            chat = model.start_chat(history=gemini_history)
-            response = await chat.send_message_async(user_message)
-            raw_text = response.text.strip()
-            
+            # Suhbat tarixi + yangi xabar birlashtirish
+            all_contents = gemini_history + [
+                types.Content(role="user", parts=[types.Part(text=user_message)])
+            ]
+
+            async with asyncio.timeout(MODEL_TIMEOUT):
+                response = await _client.aio.models.generate_content(
+                    model=model_name,
+                    contents=all_contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json",
+                        temperature=0.3,
+                        max_output_tokens=400,  # Kamroq token = tezroq javob
+                    ),
+                )
+
+            raw_text = response.text.strip() if response.text else ""
+            if not raw_text:
+                continue
+
             parsed = extract_json_from_text(raw_text)
             if parsed and isinstance(parsed, dict) and "reply" in parsed:
-                # Qiymatlarni tekshirish va tozalash
                 name = validate_name(parsed.get("name")) or current_lead_data.get("name")
                 age = validate_age(parsed.get("age")) or current_lead_data.get("age")
                 phone = format_and_validate_phone(str(parsed.get("phone") or "")) or current_lead_data.get("phone")
@@ -154,6 +172,7 @@ async def get_structured_ai_response(
                 if name and age and phone and course_id and status != "needs_operator":
                     status = "hot"
 
+                logger.info(f"AI javob olindi: model={model_name}, status={status}")
                 return {
                     "reply": parsed.get("reply", ""),
                     "name": name,
@@ -165,6 +184,7 @@ async def get_structured_ai_response(
                     "summary": parsed.get("summary")
                 }
 
+            # JSON bo'lmasa ham raw text qaytarish
             if raw_text:
                 return {
                     "reply": raw_text,
@@ -176,12 +196,21 @@ async def get_structured_ai_response(
                     "unanswered_question": None,
                     "summary": None
                 }
+
+        except TimeoutError:
+            logger.warning(f"Model '{model_name}' {MODEL_TIMEOUT}s dan oshdi, keyingi modelga o'tilmoqda...")
+            continue
         except Exception as e:
             last_error = e
-            logger.warning(f"Model '{model_name}' da xatolik ({e}), keyingi zaxira modelga o'tilmoqda...")
-            continue
+            err_str = str(e).lower()
+            if any(x in err_str for x in ["429", "quota", "rate", "503", "unavailable", "overloaded"]):
+                logger.warning(f"Model '{model_name}' kvota/server xatosi, zaxira modelga o'tilmoqda: {e}")
+                continue
+            else:
+                logger.warning(f"Model '{model_name}' xatosi, zaxira modelga o'tilmoqda: {e}")
+                continue
 
-    logger.error(f"Barcha Gemini modellari xatolik berdi. So'nggi xatolik: {last_error}", exc_info=True)
+    logger.error(f"Barcha modellar xatolik berdi. So'nggi xatolik: {last_error}", exc_info=True)
     return {
         "reply": (
             "Hozirda tizimda texnik uzilish kuzatildi. "

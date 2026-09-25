@@ -10,6 +10,7 @@ Telegram orqali yangi o'quvchilarni jalb qilish, ularning savollariga Google Gem
    - Kurslar haqidagi ma'lumotlar bazadan dinamik olinib, AI system promptiga uzatiladi (kodga qattiq yozilmagan).
    - **O'ylab topmaslik (No Hallucination):** Bazada yo'q ma'lumotlar (aniq jadval, dars kunlari yoki mavjud bo'lmagan kurslar) so'ralsa, AI *"Operatorimiz aniq javob beradi"* deb javob beradi.
    - **Suhbat tarixi:** Kamida oxirgi 10 ta xabar eslab turiladi.
+   - **Model fallback:** Birinchi model ishlamasa, avtomatik ravishda zaxira modelga o'tadi.
 
 2. **📚 Kurslarni inline tugmalar orqali ko'rsatish:**
    - Kurs nomi, davomiyligi, narxi va yosh chegarasi aniq ko'rsatiladi.
@@ -34,7 +35,9 @@ Telegram orqali yangi o'quvchilarni jalb qilish, ularning savollariga Google Gem
    - Sheets ishlamay qolsa ham bot to'xtamaydi: xato logga yoziladi, ma'lumotlar bazada xavfsiz saqlanadi.
 
 6. **🎁 Bonus imkoniyatlar:**
+   - **Admin buyruqlari:** `/add_course` — yangi kurs qo'shish, `/stats` — bugungi lidlar soni va eng ko'p tanlangan kurs.
    - **"✅ Qabul qildim" tugmasi:** Operator guruhdagi xabar ostidagi tugmani bosganda, lid statusi bazada `accepted` ga o'zgaradi va xabarda qaysi operator qabul qilgani ko'rinadi.
+   - **Spamdan himoya:** `ThrottlingMiddleware` orqali rate limiting.
    - Dublikatdan 100% himoya (`upsert_lead`).
    - Xavfsizlik: Barcha maxfiy kalitlar `.env` da, `.gitignore` to'liq sozlangan.
 
@@ -42,12 +45,14 @@ Telegram orqali yangi o'quvchilarni jalb qilish, ularning savollariga Google Gem
 
 ## 🛠 Texnologiyalar
 
-- **Dasturlash tili:** Python 3.11+
-- **Telegram Bot Framework:** `aiogram 3.x`
-- **Sun'iy intellekt:** Google Gemini API (`gemini-2.0-flash`)
-- **Ma'lumotlar bazasi:** SQLite3 / PostgreSQL + `SQLAlchemy 2.0 (asyncio)` + `aiosqlite` / `asyncpg`
-- **Jadval integratsiyasi:** `gspread` + `google-auth`
-- **Konfiguratsiya:** `pydantic-settings`, `python-dotenv`
+| Kutubxona | Maqsad |
+|-----------|--------|
+| `aiogram 3.x` | Telegram Bot Framework |
+| `google-genai` | Google Gemini AI (yangi SDK) |
+| `SQLAlchemy 2.0 (asyncio)` + `aiosqlite` | Ma'lumotlar bazasi (SQLite) |
+| `gspread` + `google-auth` | Google Sheets integratsiyasi |
+| `pydantic-settings` | Konfiguratsiya va `.env` |
+| `python-dotenv` | Environment variables |
 
 ---
 
@@ -55,30 +60,32 @@ Telegram orqali yangi o'quvchilarni jalb qilish, ularning savollariga Google Gem
 
 ```text
 Bot/
-├── db/                     # Ma'lumotlar bazasi
-│   ├── base.py             # Dvigatel, sessiya va jadvallarni yaratish
+├── db/
+│   ├── base.py             # Engine, sessiya va jadvallarni yaratish
 │   ├── models.py           # Course va Lead SQLAlchemy modellari
-│   └── crud.py             # Baza bilan ishlash (kurslar, upsert_lead)
-├── handlers/               # Telegram hodisalari
+│   └── crud.py             # Baza bilan ishlash (kurslar, upsert_lead, stats)
+├── handlers/
 │   ├── start.py            # /start komandasi va salomlashish
-│   ├── courses.py          # Kurslar inline menyusi va operator callback
+│   ├── courses.py          # Kurslar inline menyusi va "Qabul qildim" callback
 │   ├── contact.py          # Telefon kontaktini qabul qilish
+│   ├── admin.py            # /stats, /add_course (faqat adminlar)
 │   └── chat.py             # AI suhbat va lid ajratish
-├── keyboards/              # Tugmalar
+├── keyboards/
 │   ├── inline.py           # Kurslar inline klaviaturasi
 │   └── reply.py            # Kontakt yuborish reply klaviaturasi
-├── services/               # Biznes logika
-│   ├── ai.py               # Gemini AI integratsiyasi (structured JSON)
+├── middlewares/
+│   └── throttle.py         # Spam himoyasi (rate limiting)
+├── services/
+│   ├── ai.py               # Gemini AI (structured JSON, fallback modellar)
 │   ├── lead.py             # Validatsiyalar va lidlarni tarqatish
 │   ├── notifier.py         # Operator guruhiga xabarnomalar
 │   └── sheets.py           # Google Sheets ga avtomatik yozish
-├── .env                    # Maxfiy sozlamalar (gitignore)
+├── .env                    # Maxfiy sozlamalar (gitignore da)
 ├── .env.example            # Namunaviy konfiguratsiya
-├── .gitignore              # Git e'tibor bermaydigan fayllar
+├── .gitignore
 ├── config.py               # Pydantic sozlamalari
 ├── main.py                 # Botni ishga tushiruvchi markaziy fayl
-├── requirements.txt        # Kerakli Python kutubxonalari
-└── README.md               # Loyiha qo'llanmasi
+└── requirements.txt
 ```
 
 ---
@@ -92,6 +99,7 @@ cd Bot
 ```
 
 ### 2. Virtual muhit yaratish va faollashtirish
+
 **Windows (PowerShell):**
 ```powershell
 python -m venv venv
@@ -110,33 +118,42 @@ pip install -r requirements.txt
 ```
 
 ### 4. Sozlamalarni kiritish (`.env`)
-`.env.example` faylidan nusxa olib `.env` faylini yarating:
+
+`.env.example` faylidan nusxa olib `.env` faylini yarating va to'ldiring:
+
 ```env
 # Telegram Bot Token (@BotFather dan olingan)
-BOT_TOKEN=8983489219:AAGziMFmT9tPB9IxTD4TrwuRMXLYYdd_3uU
+BOT_TOKEN=your_bot_token_here
 
-# Google Gemini API (@aistudio.google.com dan)
+# Google Gemini API (https://aistudio.google.com dan)
 GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 
-# Ma'lumotlar bazasi
+# Ma'lumotlar bazasi (SQLite)
 DATABASE_URL=sqlite+aiosqlite:///bot.db
 
-# Operatorlar guruhi ID raqami
+# Operatorlar guruhi Telegram ID raqami (manfiy bo'lishi mumkin)
 OPERATOR_GROUP_ID=-1001234567890
 
 # Google Sheets
 GOOGLE_SHEET_NAME=Leads
 GOOGLE_CREDENTIALS_FILE=credentials.json
 
-# Bot adminlari ID raqamlari
-ADMIN_IDS=123456789
+# Bot adminlari (vergul bilan ajratilgan Telegram ID lar)
+ADMIN_IDS=123456789,987654321
+
+# Rate limit — foydalanuvchi xabarlari orasidagi minimal vaqt (sekund)
+RATE_LIMIT=1.0
 ```
 
 ### 5. Google Sheets ulanishi
-1. Google Cloud Console da Service Account ochib, kalitni `credentials.json` nomi bilan loyiha papkasiga joylashtiring.
-2. Google Sheets da **`Leads`** nomli jadval oching.
-3. Jadval sozlamalaridan ("Настройки доступа") Service Account emailiga **"Редактор" (Editor)** huquqini bering.
+
+1. [Google Cloud Console](https://console.cloud.google.com) da yangi Service Account oching.
+2. JSON kalitni yuklab, loyiha papkasiga `credentials.json` nomi bilan saqlang.
+3. Google Sheets da **`Leads`** nomli jadval oching.
+4. Jadval sozlamalaridan Service Account emailiga **Editor** huquqi bering.
+
+> ⚠️ `credentials.json` va `.env` fayllari `.gitignore` da — ularni repoga yuklang **emas**!
 
 ### 6. Botni ishga tushirish
 ```bash
@@ -147,15 +164,23 @@ python main.py
 
 ## 🧪 Tekshirish Ssenariylari
 
-1. **"Python kursi qancha turadi?" deb so'rash:**
-   - AI bazadagi aniq narxni aytadi: *800 000 so'm/oy*.
-2. **Bazada yo'q savol berish (Masalan: "Yakshanba kuni dars bormi?"):**
-   - AI o'ylab topmaydi va *"Bu haqida operatorimiz aniq javob beradi"* deb javob beradi. Holat `needs_operator` ga o'tadi.
-3. **Telefon o'rniga "12345" yozish:**
-   - Bot raqam noto'g'ri ekanligini tushuntirib, to'g'ri raqamni kiritishni so'raydi.
-4. **Yoshga "o'n to'rt" yoki "abc" yozish:**
-   - Bot yosh faqat raqamda bo'lishi kerakligini xushmuomala tushuntirib qayta so'raydi.
-5. **Kurs tanlab, barcha ma'lumotlarni berish:**
-   - Lid bazada saqlanadi, Google Sheets da qator paydo bo'ladi va operator guruhga `YANGI ANIQ LID` xabari boradi.
-6. **Xuddi shu akkauntdan qayta /start bosish:**
-   - Bazada dublikat yaratilmaydi, mavjud foydalanuvchi ma'lumotlari yangilanadi.
+| # | Test | Kutilgan natija |
+|---|------|-----------------|
+| 1 | *"Python kursi qancha turadi?"* | AI bazadagi aniq narxni aytadi |
+| 2 | *"Yakshanba kuni dars bormi?"* | AI o'ylab topmaydi, `needs_operator` holatiga o'tadi |
+| 3 | Telefon: `12345` | Bot xato tushuntirib, to'g'ri format so'raydi |
+| 4 | Yosh: `o'n to'rt` yoki `abc` | Bot faqat raqam so'raydi |
+| 5 | Kurs tanlab, barcha ma'lumot berish | Baza + Sheets + operator guruhga xabar |
+| 6 | Xuddi shu akkauntdan qayta `/start` | Bazada dublikat yaratilmaydi |
+| 7 | Operator guruhda `✅ Qabul qildim` bosish | Status `accepted` ga o'zgaradi, kim qabul qilgani ko'rinadi |
+
+---
+
+## 👤 Admin Buyruqlari
+
+| Buyruq | Tavsif |
+|--------|--------|
+| `/stats` | Bugungi va jami lidlar soni, eng ko'p tanlangan kurs |
+| `/add_course` | Yangi kurs qo'shish (bosqichma-bosqich) |
+
+> Faqat `.env` dagi `ADMIN_IDS` da ko'rsatilgan foydalanuvchilar uchun ishlaydi.
