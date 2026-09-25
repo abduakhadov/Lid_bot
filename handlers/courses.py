@@ -92,8 +92,10 @@ async def handle_show_all_courses(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("accept_lead:"))
 async def handle_accept_lead(callback: CallbackQuery) -> None:
-    """Operator guruhida 'Qabul qildim' tugmasi bosilganda"""
+    """Operator / Admin 'Qabul qilish' tugmasini bosganda"""
     from db.models import Lead
+    from services.sheets import update_lead_status_in_sheets
+
     lead_id_str = callback.data.split(":")[1]
     if not lead_id_str.isdigit():
         return
@@ -103,17 +105,106 @@ async def handle_accept_lead(callback: CallbackQuery) -> None:
 
     async with AsyncSessionLocal() as session:
         lead = await session.get(Lead, lead_id)
-        if lead:
-            lead.status = "accepted"
-            await session.commit()
+        if not lead:
+            await callback.answer("Lid topilmadi.", show_alert=True)
+            return
 
-    # Xabarga kim qabul qilganini ko'rsatish
+        if lead.status in ["accepted", "rejected"]:
+            status_text = "qabul qilingan" if lead.status == "accepted" else "rad etilgan"
+            await callback.answer(f"Ushbu arizaga allaqachon qaror qilingan ({status_text})!", show_alert=True)
+            return
+
+        lead.status = "accepted"
+        user_tg_id = lead.telegram_id
+        lead_phone = lead.phone
+        await session.commit()
+
+    # Google Sheets dagi statusni yangilash
+    if lead_phone:
+        try:
+            update_lead_status_in_sheets(lead_phone, "Qabul qilindi")
+        except Exception as e:
+            logger.error(f"Sheets statusini update qilishda xatolik: {e}")
+
+    # Admin xabarini tahrirlash (tugmalarni olib tashlash)
     original_text = callback.message.html_text or callback.message.text
-    updated_text = f"{original_text}\n\n✅ <b>Operator {operator_name} tomonidan qabul qilindi.</b>"
+    updated_text = f"{original_text}\n\n✅ <b>QABUL QILINDI</b> (Operator: {operator_name})"
 
     try:
         await callback.message.edit_text(text=updated_text, reply_markup=None)
-        await callback.answer("Lid muvaffaqiyatli qabul qilindi!")
+        await callback.answer("Ariza qabul qilindi!")
     except Exception as e:
         logger.error(f"Xabarni tahrirlashda xatolik: {e}")
         await callback.answer()
+
+    # Foydalanuvchining shaxsiy Telegramiga xabar yuborish
+    try:
+        user_msg = (
+            "🎉 <b>Tabriklaymiz! Sizning kursga yozilish arizangiz qabul qilindi.</b>\n\n"
+            "📞 Operatorimiz tez orada siz taqdim etgan telefon raqamingiz orqali bog'lanadi."
+        )
+        await callback.bot.send_message(chat_id=user_tg_id, text=user_msg)
+        logger.info(f"Foydalanuvchiga (ID: {user_tg_id}) 'Qabul qilindi' xabari yuborildi.")
+    except Exception as e:
+        logger.error(f"Foydalanuvchiga (ID: {user_tg_id}) xabar yuborishda xatolik: {e}")
+
+
+@router.callback_query(F.data.startswith("reject_lead:"))
+async def handle_reject_lead(callback: CallbackQuery) -> None:
+    """Operator / Admin 'Rad etish' tugmasini bosganda"""
+    from db.models import Lead
+    from services.sheets import update_lead_status_in_sheets
+
+    lead_id_str = callback.data.split(":")[1]
+    if not lead_id_str.isdigit():
+        return
+
+    lead_id = int(lead_id_str)
+    operator_name = callback.from_user.full_name or callback.from_user.first_name
+
+    async with AsyncSessionLocal() as session:
+        lead = await session.get(Lead, lead_id)
+        if not lead:
+            await callback.answer("Lid topilmadi.", show_alert=True)
+            return
+
+        if lead.status in ["accepted", "rejected"]:
+            status_text = "qabul qilingan" if lead.status == "accepted" else "rad etilgan"
+            await callback.answer(f"Ushbu arizaga allaqachon qaror qilingan ({status_text})!", show_alert=True)
+            return
+
+        lead.status = "rejected"
+        user_tg_id = lead.telegram_id
+        lead_phone = lead.phone
+        await session.commit()
+
+    # Google Sheets dagi statusni yangilash
+    if lead_phone:
+        try:
+            update_lead_status_in_sheets(lead_phone, "Rad etildi")
+        except Exception as e:
+            logger.error(f"Sheets statusini update qilishda xatolik: {e}")
+
+    # Admin xabarini tahrirlash (tugmalarni olib tashlash)
+    original_text = callback.message.html_text or callback.message.text
+    updated_text = f"{original_text}\n\n❌ <b>RAD ETILDI</b> (Operator: {operator_name})"
+
+    try:
+        await callback.message.edit_text(text=updated_text, reply_markup=None)
+        await callback.answer("Ariza rad etildi!")
+    except Exception as e:
+        logger.error(f"Xabarni tahrirlashda xatolik: {e}")
+        await callback.answer()
+
+    # Foydalanuvchining shaxsiy Telegramiga xabar yuborish
+    try:
+        user_msg = (
+            "❌ <b>Afsuski, sizning kursga yozilish arizangiz rad etildi.</b>\n\n"
+            "💡 Savollaringiz bo'lsa yoki boshqa kurslar bilan tanishmoqchi bo'lsangiz, /start bosib AI bilan qayta bog'lanishingiz mumkin."
+        )
+        await callback.bot.send_message(chat_id=user_tg_id, text=user_msg)
+        logger.info(f"Foydalanuvchiga (ID: {user_tg_id}) 'Rad etildi' xabari yuborildi.")
+    except Exception as e:
+        logger.error(f"Foydalanuvchiga (ID: {user_tg_id}) xabar yuborishda xatolik: {e}")
+
+

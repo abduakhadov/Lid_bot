@@ -12,6 +12,40 @@ logger = logging.getLogger(__name__)
 router = Router(name="chat_router")
 
 
+import re
+from typing import Sequence
+from db.models import Course
+
+
+def find_matching_course(user_text: str, courses: Sequence[Course]) -> Course | None:
+    """
+    Foydalanuvchi yozgan matn ichida bazadagi kurs nomi borligini mahalliy qidirish.
+    Gemini AI ga yuborishdan oldin bazadan kursni aniqlaydi.
+    """
+    if not user_text or not courses:
+        return None
+
+    clean_text = user_text.lower().strip()
+
+    # 1. Aniq yoki to'liq qisman moslik (masalan: "python backend" -> "Python Backend")
+    for course in courses:
+        c_name = course.name.lower()
+        if c_name in clean_text or clean_text in c_name:
+            return course
+
+    # 2. Kalit so'zlar bo'yicha moslik (masalan: "python", "frontend", "kompyuter")
+    ignored_words = {"haqida", "kursi", "kursiga", "yozilmoqchiman", "kerak", "o'rganmoqchiman", "darslari", "narxi", "qancha"}
+    words = [w for w in re.findall(r"\w+", clean_text) if len(w) >= 3 and w not in ignored_words]
+
+    for course in courses:
+        c_name = course.name.lower()
+        for word in words:
+            if word in c_name:
+                return course
+
+    return None
+
+
 @router.message(F.text)
 async def handle_user_message(message: Message, state: FSMContext) -> None:
     """
@@ -40,6 +74,17 @@ async def handle_user_message(message: Message, state: FSMContext) -> None:
     # Bazadan faol kurslar ro'yxatini olish
     async with AsyncSessionLocal() as session:
         courses = await get_active_courses(session)
+
+    # Gemini ga yuborishdan OLDIN foydalanuvchi matnidan kursni mahalliy qidirish
+    matched_course = find_matching_course(user_text, courses)
+    if matched_course:
+        current_lead_data["course_id"] = matched_course.id
+        await state.update_data(
+            selected_course_id=matched_course.id,
+            selected_course_name=matched_course.name
+        )
+        logger.info(f"Mahalliy qidiruv: '{user_text}' matnidan '{matched_course.name}' (ID: {matched_course.id}) kurs topildi.")
+
 
     # Structured AI dan javob olish
     ai_result = await get_structured_ai_response(

@@ -62,14 +62,28 @@ async def main() -> None:
     dp.include_router(chat_router)
 
     # Telegram menyu komandalarini o'rnatish
-    from aiogram.types import BotCommand
-    commands = [
+    from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
+
+    # Oddiy foydalanuvchilar uchun menyu (admin buyruqlari ko'rinmaydi)
+    user_commands = [
+        BotCommand(command="start", description="Botni qayta ishga tushirish"),
+        BotCommand(command="courses", description="Barcha kurslar ro'yxati"),
+    ]
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+
+    # Faqat adminlar uchun maxsus menyu (stats va add_course bilan)
+    admin_commands = [
         BotCommand(command="start", description="Botni qayta ishga tushirish"),
         BotCommand(command="courses", description="Barcha kurslar ro'yxati"),
         BotCommand(command="stats", description="Lidlar statistikasi (Admin)"),
         BotCommand(command="add_course", description="Yangi kurs qo'shish (Admin)"),
     ]
-    await bot.set_my_commands(commands)
+    for admin_id in settings.admin_id_list:
+        try:
+            await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+        except Exception as e:
+            logger.warning(f"Admin ({admin_id}) uchun menyu komandalari o'rnatishda xatolik: {e}")
+
 
     # Eski xabarlarni tozalash va pollingni boshlash
     await bot.delete_webhook(drop_pending_updates=True)

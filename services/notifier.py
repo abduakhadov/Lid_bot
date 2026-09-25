@@ -8,12 +8,27 @@ logger = logging.getLogger(__name__)
 
 
 def get_accept_lead_keyboard(lead_id: int) -> InlineKeyboardMarkup:
-    """Operator uchun 'Qabul qildim' tugmasi (Bonus vazifa)"""
+    """Operator/Admin uchun 'Qabul qilish' va 'Rad etish' tugmalari"""
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Qabul qildim", callback_data=f"accept_lead:{lead_id}")]
+            [
+                InlineKeyboardButton(text="✅ Qabul qilish", callback_data=f"accept_lead:{lead_id}"),
+                InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_lead:{lead_id}"),
+            ]
         ]
     )
+
+
+
+def get_target_chat_ids() -> list[int]:
+    """Xabar yuborilishi kerak bo'lgan barcha chat/user ID larni yig'ish"""
+    targets: list[int] = []
+    if settings.OPERATOR_GROUP_ID:
+        targets.append(settings.OPERATOR_GROUP_ID)
+    for admin_id in settings.admin_id_list:
+        if admin_id not in targets:
+            targets.append(admin_id)
+    return targets
 
 
 async def send_hot_lead_notification(
@@ -27,17 +42,18 @@ async def send_hot_lead_notification(
     created_at: datetime | None = None
 ) -> bool:
     """
-    Operator guruhiga 'YANGI ANIQ LID' xabarini yuborish.
+    Adminlarga (va Operator guruhiga) 'YANGI ANIQ LID' xabarini yuborish.
     """
-    if not settings.OPERATOR_GROUP_ID:
-        logger.warning("OPERATOR_GROUP_ID sozlanmagan. Operator guruhga xabar yuborilmadi.")
+    targets = get_target_chat_ids()
+    if not targets:
+        logger.warning("Na OPERATOR_GROUP_ID, na ADMIN_IDS sozlanmagan. Xabar yuborilmadi.")
         return False
 
     date_str = (created_at or datetime.now()).strftime("%d.%m.%Y %H:%M")
     tg_user = f"@{username}" if username else "Mavjud emas"
 
     message_text = (
-        "🔥 <b>YANGI ANIQ LID</b>\n\n"
+        "🔥 <b>YANGI ANIQ LID REGISTRATSIYASI</b>\n\n"
         f"<b>Ism:</b>      {full_name}\n"
         f"<b>Yosh:</b>     {age}\n"
         f"<b>Tel:</b>      {phone}\n"
@@ -46,17 +62,19 @@ async def send_hot_lead_notification(
         f"<b>Vaqt:</b>     {date_str}"
     )
 
-    try:
-        await bot.send_message(
-            chat_id=settings.OPERATOR_GROUP_ID,
-            text=message_text,
-            reply_markup=get_accept_lead_keyboard(lead_id)
-        )
-        logger.info(f"Yangi aniq lid operator guruhiga yuborildi (Lead ID: {lead_id})")
-        return True
-    except Exception as e:
-        logger.error(f"Operator guruhiga xabar yuborishda xatolik: {e}")
-        return False
+    success = False
+    for chat_id in targets:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message_text,
+                reply_markup=get_accept_lead_keyboard(lead_id)
+            )
+            success = True
+            logger.info(f"Yangi aniq lid xabari yuborildi (Lead ID: {lead_id}, Chat ID: {chat_id})")
+        except Exception as e:
+            logger.error(f"Xabar yuborishda xatolik (Chat ID: {chat_id}): {e}")
+    return success
 
 
 async def send_needs_operator_notification(
@@ -69,10 +87,11 @@ async def send_needs_operator_notification(
     username: str | None
 ) -> bool:
     """
-    Operator guruhiga 'OPERATOR YORDAMI KERAK' xabarini yuborish.
+    Adminlarga (va Operator guruhiga) 'OPERATOR YORDAMI KERAK' xabarini yuborish.
     """
-    if not settings.OPERATOR_GROUP_ID:
-        logger.warning("OPERATOR_GROUP_ID sozlanmagan. Operator guruhga xabar yuborilmadi.")
+    targets = get_target_chat_ids()
+    if not targets:
+        logger.warning("Na OPERATOR_GROUP_ID, na ADMIN_IDS sozlanmagan. Xabar yuborilmadi.")
         return False
 
     tg_user = f"@{username}" if username else "Mavjud emas"
@@ -86,14 +105,17 @@ async def send_needs_operator_notification(
         f"<b>Suhbat xulosasi:</b> {summary}"
     )
 
-    try:
-        await bot.send_message(
-            chat_id=settings.OPERATOR_GROUP_ID,
-            text=message_text,
-            reply_markup=get_accept_lead_keyboard(lead_id)
-        )
-        logger.info(f"Operator yordami so'rovi guruhga yuborildi (Lead ID: {lead_id})")
-        return True
-    except Exception as e:
-        logger.error(f"Operator guruhiga xabar yuborishda xatolik: {e}")
-        return False
+    success = False
+    for chat_id in targets:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message_text,
+                reply_markup=get_accept_lead_keyboard(lead_id)
+            )
+            success = True
+            logger.info(f"Operator yordami so'rovi yuborildi (Lead ID: {lead_id}, Chat ID: {chat_id})")
+        except Exception as e:
+            logger.error(f"Xabar yuborishda xatolik (Chat ID: {chat_id}): {e}")
+    return success
+
